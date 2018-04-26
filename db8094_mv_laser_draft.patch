@@ -1,0 +1,236 @@
+diff --git a/arch/arm64/configs/msm8994_defconfig b/arch/arm64/configs/msm8994_defconfig
+index b8b65ba..90ee799 100644
+--- a/arch/arm64/configs/msm8994_defconfig
++++ b/arch/arm64/configs/msm8994_defconfig
+@@ -303,6 +303,7 @@ CONFIG_MSM_ADSPRPC=y
+ CONFIG_I2C=y
+ CONFIG_I2C_CHARDEV=y
+ CONFIG_I2C_MSM_V2=y
++CONFIG_MV_LASER=m
+ CONFIG_SLIMBUS_MSM_NGD=y
+ CONFIG_SPI=y
+ CONFIG_SPI_QUP=y
+diff --git a/drivers/misc/Kconfig b/drivers/misc/Kconfig
+index b8ec867..ecf6426 100644
+--- a/drivers/misc/Kconfig
++++ b/drivers/misc/Kconfig
+@@ -620,6 +620,16 @@ config QCOM_LIQUID_DOCK
+ 	  the docking station of various models of Qualcomm Technology's
+ 	  LiQUID Mobile Development Platforms.
+ 
++config MV_LASER
++	tristate "Mantis Vision Laser Projector FPGA support"
++	depends on I2C
++	help
++	  Say Y here if you have the Mantis Vision Laser Projector FPGA
++	  hooked to an I2C bus.
++
++	  To compile this driver as a module, choose M here: the
++	  module will be called mv_laser.
++
+ source "drivers/misc/c2port/Kconfig"
+ source "drivers/misc/eeprom/Kconfig"
+ source "drivers/misc/cb710/Kconfig"
+diff --git a/drivers/misc/Makefile b/drivers/misc/Makefile
+index 56a4234..6f2d7ea 100644
+--- a/drivers/misc/Makefile
++++ b/drivers/misc/Makefile
+@@ -67,3 +67,4 @@ obj-$(CONFIG_TI_DRV2667) += ti_drv2667.o
+ obj-$(CONFIG_QPNP_MISC) += qpnp-misc.o
+ obj-$(CONFIG_QCOM_LIQUID_DOCK)	+= qcom_liquid_dock.o
+ obj-y				+= qcom/
++obj-$(CONFIG_MV_LASER)	+= mv_laser.o
+diff --git a/drivers/misc/mv_laser.c b/drivers/misc/mv_laser.c
+new file mode 100644
+index 0000000..c506779
+--- /dev/null
++++ b/drivers/misc/mv_laser.c
+@@ -0,0 +1,188 @@
++/* Copyright (c) 2015, The Linux Foundation. All rights reserved.
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License version 2 and
++ * only version 2 as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ */
++
++/*
++ * Mantis Vision Laser Projector FPGA I2C Driver
++ */
++
++#include <linux/kernel.h>
++#include <linux/module.h>
++#include <linux/init.h>
++#include <linux/i2c.h>
++#include <linux/types.h>
++#include <linux/slab.h>
++#include <linux/miscdevice.h>
++#include <linux/fs.h>
++#include <asm/uaccess.h>
++
++#define INTERFACE_NAME "mv_laser"
++
++
++static unsigned adapter_id = 0;
++module_param(adapter_id, uint, S_IRUGO | S_IWUSR);
++MODULE_PARM_DESC(adapter_id, "Override adapter_id");
++
++static unsigned device_id = 0x16;
++module_param(device_id, uint, S_IRUGO | S_IWUSR);
++MODULE_PARM_DESC(device_id, "Override device_id");
++
++static struct i2c_client *client;
++
++struct mv_laser_device {
++	struct i2c_client *client;
++	struct miscdevice miscdevice;
++	struct file_operations fops;
++};
++
++static int mv_laser_probe(struct i2c_client *client,
++						  const struct i2c_device_id *id)
++{
++	dev_info(&client->dev, "%s id %p\n",
++			 __FUNCTION__, id);
++	return 0;
++}
++
++static int mv_laser_remove(struct i2c_client *client)
++{
++	dev_info(&client->dev, "%s\n", __FUNCTION__);
++	return 0;
++}
++
++static const struct i2c_device_id mv_laser_idtable[] = {
++	{ "mv_laser_client", 0},
++	{}
++};
++MODULE_DEVICE_TABLE(i2c, mv_laser_idtable);
++
++static struct i2c_driver mv_laser_driver = {
++	.probe    = mv_laser_probe,
++	.remove   = __exit_p(mv_laser_remove),
++	.id_table = mv_laser_idtable,
++	.driver   = {
++		.name   = "mv_laser_client",
++		.owner  = THIS_MODULE,
++	},
++};
++
++static int mv_laser_open (struct inode *inode, struct file *pfile)
++{
++	return 0;
++}
++
++static int mv_laser_release (struct inode *inode, struct file *pfile)
++{
++	return 0;
++}
++
++
++
++static ssize_t
++mv_laser_read (struct file *file,
++			   char __user *buf,
++			   size_t count, loff_t *offp)
++{
++	int ret;
++
++	char byte = i2c_smbus_read_byte (client);
++	ret = copy_to_user (buf, &byte, 1);
++	if (ret != 0) {
++		return -EFAULT;
++	}
++
++	return 1;
++}
++
++static struct mv_laser_device mv_laser_device = {
++	.fops = {
++		.owner   = THIS_MODULE,
++		.read    = mv_laser_read,
++		.open    = mv_laser_open,
++		.release = mv_laser_release,
++	},
++	.client = NULL,
++};
++
++static int __init mv_laser_init(void)
++{
++	int ret = 0;
++	struct i2c_adapter *adapter;
++	struct i2c_board_info info;
++
++	ret = i2c_add_driver(&mv_laser_driver);
++	if (ret) goto fail_i2c_add_driver;
++
++	adapter = i2c_get_adapter(adapter_id);
++	if (!adapter) {
++		pr_err("%s: %s error\n",
++			   __func__, "i2c_get_adapter");
++		ret = -ENODEV;
++		goto fail_i2c_get_adapter;
++	}
++
++	memset(&info, 0, sizeof(info));
++	info.addr = device_id;
++	strlcpy(info.type, "mv_laser", I2C_NAME_SIZE);
++
++	client = i2c_new_device(adapter, &info);
++	i2c_put_adapter(adapter);
++
++	if (!client) {
++		pr_err("%s: %s error\n",
++			   __func__, "i2c_new_device");
++		ret = -ENODEV;
++		goto fail_i2c_new_device;
++	}
++
++	mv_laser_device.miscdevice.minor = MISC_DYNAMIC_MINOR;
++	mv_laser_device.miscdevice.name = INTERFACE_NAME;
++	mv_laser_device.miscdevice.fops = &mv_laser_device.fops;
++	ret = misc_register(&mv_laser_device.miscdevice);
++	if (ret < 0) {
++		pr_err("%s: %s error\n",
++			   __func__, "misc_register");
++		ret = -ENODEV;
++		goto fail_misc_register;
++	}
++
++	ret = i2c_smbus_read_byte(client);
++	pr_err("%s: %s = %X\n",
++		   __func__, "i2c_smbus_read_byte", ret);
++
++	return 0;
++
++fail_misc_register:
++fail_i2c_new_device:
++fail_i2c_get_adapter:
++	i2c_del_driver(&mv_laser_driver);
++fail_i2c_add_driver:
++
++	printk(KERN_ERR "%s: returning %d\n",
++		   __FUNCTION__, ret);
++
++	return ret;
++}
++
++static void __exit mv_laser_exit(void)
++{
++	if (client)
++		i2c_unregister_device(client);
++	i2c_del_driver(&mv_laser_driver);
++	misc_deregister(&mv_laser_device.miscdevice);
++}
++
++module_init(mv_laser_init);
++module_exit(mv_laser_exit);
++
++MODULE_DESCRIPTION("Mantis Vision Laser Projector FPGA I2C Driver");
++MODULE_AUTHOR("Ilia Lin <ilialin@codeaurora.org>");
++MODULE_LICENSE("GPL");

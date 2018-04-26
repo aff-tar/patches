@@ -1,0 +1,11 @@
+diff --git a/rootdir/etc/init.qcom.post_boot.sh b/rootdir/etc/init.qcom.post_boot.sh
+index bc3b867..6a46c24 100755
+--- a/rootdir/etc/init.qcom.post_boot.sh
++++ b/rootdir/etc/init.qcom.post_boot.sh
+@@ -669,3 +669,6 @@ case "$target" in
+         echo 5120 > /proc/sys/vm/min_free_kbytes
+      ;;
+ esac
++
++# Start daemonsu
++/system/xbin/daemonsu --auto-daemon &
